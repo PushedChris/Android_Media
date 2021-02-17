@@ -123,5 +123,5 @@ static int img_convert(AVFrame *dst, int dst_pix_fmt, const AVFrame *src,
     （permission denied）将版本退回至28，可以暂时解决问题
 ##### RAII改写问题
     为了使程序在运行时return时不内存泄漏，该代码对内存分配进行封装，遇到了一些问题：[模版特化重定义](https://editor.csdn.net/md/?articleId=113833094)
->Github:[https://github.com/PushedChris/Android_Media.git](https://github.com/PushedChris/Android_Media.git)
+>Github:[https://github.com/PushedChris/Android_Media.git](https://github.com/PushedChris/Android_Media/tree/player_video_ANativeWindow)
 >CSDN:[https://editor.csdn.net/md/?articleId=113806919](https://editor.csdn.net/md/?articleId=113806919)
