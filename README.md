@@ -114,6 +114,14 @@ static int img_convert(AVFrame *dst, int dst_pix_fmt, const AVFrame *src,
     1. 弃用av_register_all
     2. 弃用AVStream::codec
     3. 弃用avcodec_decode_video2
+    旧API需要循环获取视频帧，新API通过上下文来操作视频帧,新API集成packet
+    新API直接使用avcodec_send_packet & avcodec_receive_frame来进行解析
+    [avcodec_send_packet源码分析](https://blog.csdn.net/qq_33271192/article/details/113835344)
     4. 弃用AVPictrue
 ##### 对Android媒体读写权限问题
-    使用Android 9.0+（29+）版本的API没有对本地文件的读写权限，每次返回-13（permission denied）将版本退回至28，可以暂时解决问题
+    使用Android 9.0+（29+）版本的API没有对本地文件的读写权限，每次返回-13  
+    （permission denied）将版本退回至28，可以暂时解决问题
+##### RAII改写问题
+    为了使程序在运行时return时不内存泄漏，该代码对内存分配进行封装，遇到了一些问题：[模版特化重定义](https://editor.csdn.net/md/?articleId=113833094)
+>Github:[https://github.com/PushedChris/Android_Media.git](https://github.com/PushedChris/Android_Media.git)
+>CSDN:[https://editor.csdn.net/md/?articleId=113806919](https://editor.csdn.net/md/?articleId=113806919)

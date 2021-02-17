@@ -124,14 +124,14 @@ void* open_media(void *argv) {
             }
             while (avcodec_receive_frame(vcodec_ctx.get(), m_Frame.get()) == 0) {
                 //获取到 m_Frame 解码数据，进行格式转换，然后进行渲染
-                av_log(NULL, AV_LOG_ERROR, "get frame : %d. \n",m_StreamIndex);
+                av_log(NULL, AV_LOG_ERROR, "get frame : %d. \n", m_StreamIndex);
                 AVFrame pict;
                 av_image_alloc(pict.data, pict.linesize,
                                vcodec_ctx->width,
                                vcodec_ctx->height, AV_PIX_FMT_RGB565LE, 16);
 
                 // Convert the image into YUV format that SDL uses
-                img_convert(&pict, AV_PIX_FMT_RGB565LE,m_Frame.get(),
+                img_convert(&pict, AV_PIX_FMT_RGB565LE, m_Frame.get(),
                             vcodec_ctx->pix_fmt,
                             vcodec_ctx->width,
                             vcodec_ctx->height);
@@ -143,17 +143,6 @@ void* open_media(void *argv) {
         }
         av_packet_unref(m_Packet.get()); //释放 m_Packet 引用，防止内存泄漏
     }
-
-
-    // read url media data circle
-    //旧API需要循环获取视频帧，新API通过上下文来操作视频帧,新API集成packet
-//    while (av_read_frame(fmt_ctx.get(), &pkt) >= 0) {
-//        if (pkt.stream_index == video_stream_index) {
-//            //packet_queue_put(&video_queue, &pkt);
-//        } else {
-//            av_free_packet(&pkt);
-//        }
-//    }
 
     return 0;
 }
