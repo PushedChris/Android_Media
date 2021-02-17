@@ -67,23 +67,23 @@ Java_com_comochris_mediaplayer_FFMediaPlayer_setSurface(JNIEnv *env, jobject thi
 
     //LOGV("fun env is %p", env);
 
-    jclass localVideoSurfaceClass = env->FindClass(
-            "com/comochris/mediaplayer/FFMediaPlayer");
-    if (NULL == localVideoSurfaceClass) {
-        LOGV("FindClass VideoSurface failure.");
-        return -1;
-    }
-
-    globalVideoSurfaceClass = (jclass) env->NewGlobalRef(
-            localVideoSurfaceClass);
-    if (NULL == globalVideoSurfaceClass) {
-        LOGV("localVideoSurfaceClass to globalVideoSurfaceClass failure.");
-    }
-
-    globalVideoSurfaceObject = (jclass) env->NewGlobalRef(thiz);
-    if (NULL == globalVideoSurfaceObject) {
-        LOGV("obj to globalVideoSurfaceObject failure.");
-    }
+//    jclass localVideoSurfaceClass = env->FindClass(
+//            "com/comochris/mediaplayer/FFMediaPlayer");
+//    if (NULL == localVideoSurfaceClass) {
+//        LOGV("FindClass VideoSurface failure.");
+//        return -1;
+//    }
+//
+//    globalVideoSurfaceClass = (jclass) env->NewGlobalRef(
+//            localVideoSurfaceClass);
+//    if (NULL == globalVideoSurfaceClass) {
+//        LOGV("localVideoSurfaceClass to globalVideoSurfaceClass failure.");
+//    }
+//
+//    globalVideoSurfaceObject = (jclass) env->NewGlobalRef(thiz);
+//    if (NULL == globalVideoSurfaceObject) {
+//        LOGV("obj to globalVideoSurfaceObject failure.");
+//    }
 
     if (NULL == view) {
         LOGV("surface is null, destroy?");
