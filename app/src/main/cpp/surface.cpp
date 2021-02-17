@@ -3,7 +3,7 @@
 //
 
 #include "com_comochris_mediaplayer.h"
-#include "player.h"
+#include "IAVDecoder.h"
 
 // for native window JNI
 #include <android/native_window_jni.h>

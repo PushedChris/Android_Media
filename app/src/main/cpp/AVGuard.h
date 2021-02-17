@@ -5,7 +5,7 @@
 #ifndef MEDIAPLAYER_AVGUARD_H
 #define MEDIAPLAYER_AVGUARD_H
 
-#include "player.h"
+#include "IAVDecoder.h"
 
 template<typename T>
 class AVGuard {

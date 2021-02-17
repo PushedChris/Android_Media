@@ -52,8 +52,6 @@ typedef struct GlobalContexts {
     int pause;
 }GlobalContext;
 
-
-void* video_thread(void *argv);
 void* open_media(void *argv);
 int32_t setBuffersGeometry(int32_t width, int32_t height);
 void renderSurface(uint8_t *pixel);

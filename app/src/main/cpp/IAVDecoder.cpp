@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <signal.h>
 
-#include "player.h"
+#include "IAVDecoder.h"
 #include "AVGuard.h"
 
 #define TEST_FILE_TFCARD "/storage/emulated/0/DCIM/Camera/abc.mp4"
@@ -53,7 +53,7 @@ void* open_media(void *argv) {
         err = -1;
         return 0;
     }
-    //获取音视频流信息
+    //获取视频流信息
     if ((err = avformat_find_stream_info(fmt_ctx.get(), NULL)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "avformat_find_stream_info : err is %d \n",
                err);
@@ -61,7 +61,7 @@ void* open_media(void *argv) {
         return 0;
     }
 
-    //获取音视频流引索
+    //获取视频流引索
     // search video stream in all streams.
     for (i = 0; i < fmt_ctx->nb_streams; i++) {
         // because video stream only one, so found and stop.
@@ -135,8 +135,6 @@ void* open_media(void *argv) {
                             vcodec_ctx->pix_fmt,
                             vcodec_ctx->width,
                             vcodec_ctx->height);
-
-                renderSurface(pict.data[0]);
 
                 av_freep(&pict.data[0]);
             }
