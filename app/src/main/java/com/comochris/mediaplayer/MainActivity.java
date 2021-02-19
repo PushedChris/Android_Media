@@ -46,19 +46,19 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        mVideoSurface.pausePlayer();
+
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        mVideoSurface.resumePlayer();
+
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        mVideoSurface.stopPlayer();
+
     }
 
     @Override

@@ -9,7 +9,7 @@ import android.view.SurfaceView;
 
 public class FFMediaPlayer extends SurfaceView implements SurfaceHolder.Callback{
     private static final String TAG = "mediaplayer";
-
+    private String TEST_FILE_TFCARD = "/storage/emulated/0/DCIM/Camera/abc.mp4";
     static {
         System.loadLibrary("player-ffmpeg");
     }
@@ -29,38 +29,34 @@ public class FFMediaPlayer extends SurfaceView implements SurfaceHolder.Callback
                                int height) {
         Log.v(TAG, "surfaceChanged, format is " + format + ", width is "
                 + width + ", height is" + height);
+        setSize(width,height);
     }
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         Log.v(TAG, "surfaceCreated");
+        initPlayer();
         setSurface(holder.getSurface());
+        openMedia(TEST_FILE_TFCARD);//3 thread
+        startPlayer();
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         Log.v(TAG, "surfaceDestroyed");
-    }
-
-    public int pausePlayer() {
-        return nativePausePlayer();
-    }
-
-    public int resumePlayer() {
-        return nativeResumePlayer();
-    }
-
-    public int stopPlayer() {
-        return nativeStopPlayer();
+        stopPlayer();
+        closeMedia();
+        destoryPlayer();
     }
 
     private static native String GetFFmpegVersion();
-
+    public native int initPlayer();
+    public native int destoryPlayer();
+    public native int startPlayer();
+    public native int stopPlayer();
+    public native int openMedia(String filePath);
+    public native int closeMedia();
     public native int setSurface(Surface view);
+    public  native int setSize(int width,int height);
 
-    public native int nativePausePlayer();
-
-    public native int nativeResumePlayer();
-
-    public native int nativeStopPlayer();
 }

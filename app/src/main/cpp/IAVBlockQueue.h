@@ -43,10 +43,6 @@ public:
     // notify all the get option to return immediately. if data queue is still empty, get option will return a NULL.
     void notifyWaitGet();
 
-
-
-
-
 private:
     int capacity = 0;
     mutex queueMu;

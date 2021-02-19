@@ -2,10 +2,6 @@
 #ifndef __PLAYER_H__
 #define __PLAYER_H__
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <assert.h>
 #include <jni.h>
 #include <pthread.h>
@@ -25,6 +21,9 @@ extern "C" {
 #include <sys/syscall.h>
 #include <sched.h>
 
+#include "IAVBlockQueue.h"
+#include "AVQueueInterface.h"
+
 extern "C" {
 #include "libavutil/log.h"
 #include "libavutil/time.h"
@@ -40,29 +39,81 @@ extern "C" {
 
 #include <android/log.h>
 
-typedef struct GlobalContexts {
-    AVCodecContext *acodec_ctx;
-    AVCodecContext *vcodec_ctx;
-    AVStream *vstream;
-    AVStream *astream;
-    AVCodec *vcodec;
-    AVCodec *acodec;
 
-    int quit;
-    int pause;
-}GlobalContext;
+using namespace std;
 
-void* open_media(void *argv);
-int32_t setBuffersGeometry(int32_t width, int32_t height);
-void renderSurface(uint8_t *pixel);
+class IAVDecoder{
+public:
+    IAVDecoder();
+    ~IAVDecoder();
 
-extern GlobalContext global_context;
+    bool openFile(const char *inputFile);
+    void closeInput();
+    bool hasAudio();
+    bool hasVideo();
+
+    void setDataReceiver(AVQueueInterface* _dataReceiver);
+
+    int32_t getVideoWidth();
+    int32_t getVideoHeight();
+
+    int64_t getDuration();
+
+private:
+    bool initComponents(const char *path);
+    void resetComponents();
+
+    void decodeAudio();
+    void decodeVideo();
+    void readFile();
+
+    AVPacket *getFreePacket();
+
+    static void audioThreadCallback(void *context);
+    static void videoThreadCallback(void *context);
+    static void readThreadCallback(void *context);
+
+    void recyclePackets();
+
+    void discardAllReadPackets();
+
+    AVFormatContext *formatCtx = NULL;
+
+    int audioIndex = -1, videoIndex = -1;
+    AVStream *audioStream = NULL, *videoStream = NULL;
+    AVCodecContext *audioCodecCtx = NULL, *videoCodecCtx = NULL;
+    AVCodec *audioCodec, *videoCodec = NULL;
+    SwrContext *audioSwrCtx = NULL;
+    SwsContext *videoSwsCtx = NULL;
+
+    int64_t duration = 0;
+
+    thread *audioDecodeThread = NULL;
+    thread *videoDecodeThread = NULL;
+    thread *readThread = NULL;
+
+    bool stopDecodeFlag = false;
+
+    float videoFPS = 0;
+
+    int32_t audioSampleCountLimit = 0;
+
+    static const int32_t AUDIO_SAMPLE_RATE = 44100;
+
+    bool audioDecodeFinished = false;
+    bool videoDecodeFinished = false;
+
+    IAVBlockQueue<AVPacket *> *audioPacketQueue;
+    IAVBlockQueue<AVPacket *> *videoPacketQueue;
+
+    AVQueueInterface *dataReceiver;
+
+    mutex componentsMu;
+};
+
+
 
 #define TAG "FFmpeg"
 #define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, TAG, __VA_ARGS__)
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* __PLAYER_H__ */

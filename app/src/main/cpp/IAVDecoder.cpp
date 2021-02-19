@@ -1,147 +1,735 @@
-#include <stdio.h>
-#include <signal.h>
+//
+// Created by 祖国瑞 on 2020-04-12.
+//
 
 #include "IAVDecoder.h"
-#include "AVGuard.h"
+#include <stdint.h>
+#include <android/log.h>
+#include <chrono>
 
-#define TEST_FILE_TFCARD "/storage/emulated/0/DCIM/Camera/abc.mp4"
-GlobalContext global_context;
+using namespace std;
 
-static void ffmpeg_log_callback(void *ptr, int level, const char *fmt,
-                                va_list vl) {
-    __android_log_vprint(ANDROID_LOG_DEBUG, "FFmpeg", fmt, vl);
+#define MODULE_NAME  "IAVDecoder"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, MODULE_NAME, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, MODULE_NAME, __VA_ARGS__)
+
+// For ffmpeg log
+static void log_callback(void *ctx, int level, const char *fmt, va_list args)
+{
+    if(level == AV_LOG_ERROR)
+    {
+        __android_log_print(ANDROID_LOG_DEBUG, "FFmpeg", fmt, args);
+    }else{
+        __android_log_print(ANDROID_LOG_ERROR, "FFmpeg", fmt, args);
+    }
 }
 
-static int img_convert(AVFrame *dst, int dst_pix_fmt, const AVFrame *src,
-                       int src_pix_fmt, int src_width, int src_height) {
-    int w;
-    int h;
-    struct SwsContext *pSwsCtx;
 
-    w = src_width;
-    h = src_height;
 
-    pSwsCtx = sws_getContext(w, h, (AVPixelFormat) src_pix_fmt, w, h,
-                             (AVPixelFormat) dst_pix_fmt, SWS_BICUBIC, NULL, NULL, NULL);
-    sws_scale(pSwsCtx, (const uint8_t* const *) src->data, src->linesize, 0, h,
-              dst->data, dst->linesize);
-
-    return 0;
+IAVDecoder::IAVDecoder() {
+    av_log_set_callback(log_callback);
+    LOGD("constructor");
+    audioPacketQueue = new IAVBlockQueue<AVPacket *>();
+    videoPacketQueue = new IAVBlockQueue<AVPacket *>(20);
 }
 
-void* open_media(void *argv) {
-    int i;
+IAVDecoder::~IAVDecoder() {
+    closeInput();
+    delete(audioPacketQueue);
+    delete(videoPacketQueue);
+}
+
+int64_t IAVDecoder::getDuration() {
+    return duration;
+}
+
+void IAVDecoder::recyclePackets() {
+    if(audioPacketQueue != NULL)
+    {
+        AVPacket *p;
+        while((p = audioPacketQueue->get(false)) != NULL)
+        {
+            av_packet_unref(p);
+            av_packet_free(&p);
+        }
+        while((p = audioPacketQueue->getUsed()) != NULL)
+        {
+            av_packet_free(&p);
+        }
+    }
+
+    if(videoPacketQueue != NULL)
+    {
+        AVPacket *p;
+        while((p = videoPacketQueue->get(false)) != NULL)
+        {
+            av_packet_unref(p);
+            av_packet_free(&p);
+        }
+        while((p = videoPacketQueue->getUsed()) != NULL)
+        {
+            av_packet_free(&p);
+        }
+    }
+}
+
+bool IAVDecoder::openFile(const char *inputFile) {
+
+    duration = -1;
+
+    closeInput();
+    stopDecodeFlag = false;
+
+    if(!initComponents(inputFile))
+    {
+        LOGE("init components error");
+        resetComponents();
+        return false;
+    }
+    readThread = new thread(readThreadCallback, this);
+    if(hasAudio())
+    {
+        audioDecodeThread = new thread(audioThreadCallback, this);
+    }
+    if(hasVideo())
+    {
+        videoDecodeThread = new thread(videoThreadCallback, this);
+    }
+    if(!hasAudio() && !hasVideo())
+    {
+        return false;
+    }
+    return true;
+}
+
+bool IAVDecoder::hasVideo() {
+    return videoIndex != -1 && videoStream != NULL;
+}
+
+bool IAVDecoder::hasAudio() {
+    return audioIndex != -1 && audioStream != NULL;
+}
+
+bool IAVDecoder::initComponents(const char *path) {
+    LOGD("initComponents");
     int err = 0;
-
-    AVPacket pkt;
-    int video_stream_index = -1;
-
-    av_log_set_callback(ffmpeg_log_callback);
-    // set log level
-    av_log_set_level(AV_LOG_INFO);
-
-    //1. 创建封装格式上下文
-    AVGuard<AVFormatContext> fmt_ctx;
-
-    //2. 打开输入文件，解封装
-    err = avformat_open_input(&fmt_ctx, TEST_FILE_TFCARD, NULL, NULL);
-    if (err < 0) {
-        char errbuf[64];
-        av_strerror(err, errbuf, 64);
-        av_log(NULL, AV_LOG_ERROR, "avformat_open_input : err is %d , %s\n",
-               err, errbuf);
-        err = -1;
-        return 0;
-    }
-    //获取视频流信息
-    if ((err = avformat_find_stream_info(fmt_ctx.get(), NULL)) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "avformat_find_stream_info : err is %d \n",
-               err);
-        err = -1;
-        return 0;
+    formatCtx = avformat_alloc_context();
+    if (!formatCtx)
+    {
+        LOGE("Can't allocate context\n");
+        return false;
     }
 
-    //获取视频流引索
-    // search video stream in all streams.
-    for (i = 0; i < fmt_ctx->nb_streams; i++) {
-        // because video stream only one, so found and stop.
-        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            video_stream_index = i;
+    err = avformat_open_input(&formatCtx, path, NULL, NULL);
+    if (err < 0)
+    {
+        LOGE("Can't open input file:%d\n",err);
+        return false;
+    }
+
+    err = avformat_find_stream_info(formatCtx, NULL);
+    if(err < 0)
+    {
+        LOGE("Error when find stream info\n");
+        return false;
+    }
+
+    audioIndex = -1;
+    videoIndex = -1;
+
+    for(int i = 0; i < formatCtx->nb_streams; i++)
+    {
+        AVStream *stream = formatCtx->streams[i];
+        AVMediaType type = stream->codecpar->codec_type;
+        if(type == AVMEDIA_TYPE_AUDIO)
+        {
+            audioIndex = i;
+            audioStream = stream;
+        }
+        else if(type == AVMEDIA_TYPE_VIDEO)
+        {
+            videoIndex = i;
+            videoStream = stream;
+        }
+    }
+
+    if(audioIndex == -1 && videoIndex == -1)
+    {
+        LOGE("Neither audio stream or video stream found in this file");
+        return false;
+    }
+
+    if(audioIndex != -1)
+    {
+        av_dump_format(formatCtx, audioIndex, NULL, 0);
+    }else{
+        LOGE("audio not found in this file");
+    }
+
+    if(videoIndex != -1)
+    {
+        av_dump_format(formatCtx, videoIndex, NULL, 0);
+    } else
+    {
+        LOGE("video not found in this file");
+    }
+
+    // find audio stream, prepare audio decode components
+    if(audioIndex != -1)
+    {
+        audioCodec = avcodec_find_decoder(audioStream->codecpar->codec_id);
+
+        if (audioCodec == NULL)
+        {
+            LOGE("can not find audio codec for %d", audioStream->codecpar->codec_id);
+            return false;
+        }
+        audioCodecCtx = avcodec_alloc_context3(audioCodec);
+        if(audioCodecCtx == NULL)
+        {
+            LOGE("can not alloc audioCodecCtx");
+            return false;
+        }
+
+        if (avcodec_parameters_to_context(audioCodecCtx, audioStream->codecpar) < 0)
+        {
+            LOGE("Error when copy params to codec context");
+            return false;
+        }
+        if (avcodec_open2(audioCodecCtx, audioCodec, NULL) < 0)
+        {
+            LOGE("Error when open codec\n");
+            return false;
+        }
+
+        int32_t in_sample_rate = audioCodecCtx->sample_rate;
+        int32_t in_channels = audioCodecCtx->channels;
+        uint64_t in_channel_layout = audioCodecCtx->channel_layout;
+        AVSampleFormat in_sample_fmt = audioCodecCtx->sample_fmt;
+
+        const int32_t out_sample_rate = AUDIO_SAMPLE_RATE;
+        const int32_t out_channels = 2;
+        const AVSampleFormat out_sample_fmt = AV_SAMPLE_FMT_S16;
+        const uint64_t out_channel_layout = AV_CH_LAYOUT_STEREO;
+
+        if(in_channel_layout == 0)
+        {
+            LOGE("in_channel_layout == 0, now we compute it by channel count");
+            in_channel_layout = av_get_default_channel_layout(in_channels);
+        }
+
+        LOGV("Convert data format::\n");
+        LOGV("    in_sample_rate: %d\n", in_sample_rate);
+        LOGV("    in_sample_fmt: %d\n", in_sample_fmt);
+        LOGV("    in_channels: %d\n", in_channels);
+        LOGV("    in_channel_layout: %ld\n", in_channel_layout);
+
+        audioSwrCtx = swr_alloc();
+        audioSwrCtx = swr_alloc_set_opts(audioSwrCtx, out_channel_layout, out_sample_fmt, out_sample_rate, in_channel_layout, in_sample_fmt, in_sample_rate, 0, NULL);
+
+        err = swr_init(audioSwrCtx);
+
+        if(err != 0)
+        {
+            LOGE("audio swr init failed, err = %d", err);
+        }
+
+
+    }
+
+    if(videoIndex != -1)
+    {
+        videoCodec = avcodec_find_decoder(videoStream->codecpar->codec_id);
+
+        if (videoCodec == NULL)
+        {
+            LOGE("can not find video codec for %d", videoStream->codecpar->codec_id);
+            return false;
+        }
+        videoCodecCtx = avcodec_alloc_context3(videoCodec);
+        if(videoCodecCtx == NULL)
+        {
+            LOGE("can not alloc videoCodecCtx");
+            return false;
+        }
+
+        if (avcodec_parameters_to_context(videoCodecCtx, videoStream->codecpar) < 0)
+        {
+            LOGE("Error when copy params to codec context");
+            return false;
+        }
+        if (avcodec_open2(videoCodecCtx, videoCodec, NULL) < 0)
+        {
+            LOGE("Error when open codec\n");
+            return false;
+        }
+
+        videoSwsCtx = sws_getContext(videoCodecCtx->width, videoCodecCtx->height, videoCodecCtx->pix_fmt, videoCodecCtx->width, videoCodecCtx->height, AV_PIX_FMT_RGB565LE, SWS_BILINEAR, NULL, NULL, NULL);
+        if(videoSwsCtx == NULL)
+        {
+            LOGE("init videoSwsCtx failed");
+            return false;
+        }
+
+
+        videoFPS = videoStream->avg_frame_rate.num * 1.0f / videoStream->avg_frame_rate.den;
+
+        LOGD("video FPS = %f", videoFPS);
+
+    }
+
+    audioSampleCountLimit = 512;
+    duration = formatCtx->duration / AV_TIME_BASE * 1000;
+    LOGD("get duration from format context = %ld", duration);
+    return true;
+}
+
+/*
+ * Don't call this function if decode thread is running. I don't know why if call this
+ * at init stage, initing components will crash with SIGNAL FAULT.
+ * */
+void IAVDecoder::resetComponents() {
+    unique_lock<mutex> locker(componentsMu);
+    if(audioSwrCtx != NULL)
+    {
+        swr_free(&audioSwrCtx);
+        audioSwrCtx = NULL;
+    }
+
+    if(videoSwsCtx != NULL)
+    {
+        sws_freeContext(videoSwsCtx);
+        videoSwsCtx = NULL;
+    }
+    if(audioCodecCtx != NULL)
+    {
+        avcodec_close(audioCodecCtx);
+        avcodec_free_context(&audioCodecCtx);
+        audioCodecCtx = NULL;
+    }
+
+    audioCodec = NULL;
+
+    if(videoCodecCtx != NULL)
+    {
+        avcodec_close(videoCodecCtx);
+        avcodec_free_context(&videoCodecCtx);
+        videoCodecCtx = NULL;
+    }
+
+    videoCodec = NULL;
+
+    if(formatCtx != NULL)
+    {
+        avformat_close_input(&formatCtx);
+        avformat_free_context(formatCtx);
+        formatCtx = NULL;
+    }
+    locker.unlock();
+}
+
+void IAVDecoder::closeInput() {
+    LOGD("call closeInput");
+    stopDecodeFlag = true;
+
+    if(readThread != NULL)
+    {
+        audioPacketQueue->notifyWaitPut();
+        videoPacketQueue->notifyWaitPut();
+        if(readThread->joinable())
+        {
+            readThread->join();
+        }
+        delete(readThread);
+        readThread = NULL;
+    }
+    LOGD("readThread stopped");
+
+    if(audioDecodeThread != NULL && audioDecodeThread->joinable())
+    {
+        audioPacketQueue->notifyWaitGet();
+        audioDecodeThread->join();
+        delete(audioDecodeThread);
+        audioDecodeThread = NULL;
+    }
+    LOGD("decodeAudioThread stopped");
+    if(videoDecodeThread != NULL && videoDecodeThread->joinable())
+    {
+        videoPacketQueue->notifyWaitGet();
+        videoDecodeThread->join();
+        delete(videoDecodeThread);
+        videoDecodeThread = NULL;
+    }
+    LOGD("decodeVideoThread stopped");
+
+    discardAllReadPackets();
+    recyclePackets();
+    resetComponents();
+    LOGD("exit closeInput");
+}
+
+
+void IAVDecoder::audioThreadCallback(void *context) {
+    ((IAVDecoder *)context) -> decodeAudio();
+}
+
+void IAVDecoder::videoThreadCallback(void *context) {
+    ((IAVDecoder *)context) -> decodeVideo();
+}
+
+void IAVDecoder::readThreadCallback(void *context) {
+    ((IAVDecoder *)context) -> readFile();
+}
+
+AVPacket* IAVDecoder::getFreePacket() {
+    AVPacket *packet = NULL;
+    packet = audioPacketQueue->getUsed();
+    if(packet == NULL)
+    {
+        packet = videoPacketQueue->getUsed();
+    }
+
+    if(packet == NULL)
+    {
+        packet = av_packet_alloc();
+        av_init_packet(packet);
+    }
+    return packet;
+}
+
+int32_t IAVDecoder::getVideoHeight() {
+    if(videoStream != NULL)
+    {
+        return videoStream->codecpar->height;
+    }
+    return -1;
+}
+
+int32_t IAVDecoder::getVideoWidth() {
+    if(videoStream != NULL)
+    {
+        return videoStream->codecpar->width;
+    }
+    return -1;
+}
+
+void IAVDecoder::readFile() {
+    if(formatCtx == NULL)
+    {
+        LOGE("formatCtx is NULL when start decode");
+        return;
+    }
+    bool readFinish = false;
+    while(!stopDecodeFlag && !readFinish)
+    {
+        AVPacket *packet = getFreePacket();
+        if(av_read_frame(formatCtx, packet) < 0)
+        {
+            //读到最后帧，视作EOF
+            LOGD("Finished reading audio stream");
+            readFinish = true;
+            //将packet的大小设置为0，让解码器刷新
+            packet->size = 0;
+            audioPacketQueue->put(packet);
+            AVPacket *packet1 = getFreePacket();
+            packet1->size = 0;
+            videoPacketQueue->put(packet1);
+        } else
+        {
+            if(packet->stream_index == audioIndex)
+            {
+                LOGD("read a audio packet, put it to queue, audioPacketQueue.size = %d", audioPacketQueue->getSize());
+                audioPacketQueue->put(packet);
+                LOGD("put audio packet finished");
+            }
+            else if(packet->stream_index == videoIndex)
+            {
+                LOGD("read a video packet, put it to queue, videoPacketQueue.size = %d", videoPacketQueue->getSize());
+                videoPacketQueue->put(packet);
+                LOGD("put video packet finished");
+            }
+            else
+            {
+                LOGE("unknow packet stream %d", packet->stream_index);
+                av_packet_unref(packet);
+                //没有用的Packets放在一个单独的队列中
+                audioPacketQueue->putToUsed(packet);
+            }
+        }
+
+    }
+    LOGD("readThread quit");
+
+}
+
+void IAVDecoder::decodeAudio() {
+    audioDecodeFinished = false;
+
+    if(audioCodecCtx == NULL)
+    {
+        LOGE("audioCodecCtx is NULL when start decode");
+        return;
+    }
+
+    if(audioCodec == NULL)
+    {
+        LOGE("audioCodec is NULL when start decode");
+        return;
+    }
+    if(audioStream == NULL)
+    {
+        LOGE("audioStream is NULL when start decode");
+        return;
+    }
+    if(audioSwrCtx == NULL)
+    {
+        LOGE("audioSwrCtx is NULL when start decode");
+        return;
+    }
+
+    AVFrame *frame = av_frame_alloc();
+
+    int maxAudioDataSizeInByte = audioSampleCountLimit * 2 * sizeof(int16_t);
+
+    LOGD("max audio data size in byte = %d", maxAudioDataSizeInByte);
+
+    int err = 0;
+    bool readFinished = false;
+    while(!stopDecodeFlag && !readFinished)
+    {
+
+        AVPacket *packet = audioPacketQueue->get();
+        LOGD("get a audio packet, audioPacketQueue.size = %d", audioPacketQueue->getSize());
+        // Someone stop decode and call notifyGetWiat(), if so, we should finish decoding.
+        if(packet == NULL)
+        {
+            readFinished = true;
             break;
         }
-    }
 
-    // if no video and audio, exit
-    if (-1 == video_stream_index) {
-        return 0;
-    }
+        err = avcodec_send_packet(audioCodecCtx, packet);
+        if(err == AVERROR(EAGAIN))
+        {
+            // This must not happen
+        } else if (err == AVERROR_EOF){
+            // codec says is EOF, cause we set the packet->size = 0.
+            readFinished = true;
+        } else if (err != 0){
+            LOGE("audio call avcodec_send_packet() returns %d\n", err);
+            continue;
+        } else //err == 0
+        {
+            //read until can not read more to ensure codec won't be full
+            while(1)
+            {
+                err = avcodec_receive_frame(audioCodecCtx, frame);
+                if(err == AVERROR(EAGAIN))
+                {
+                    //Can not read until send a new packet
+                    break;
+                } else if(err == AVERROR_EOF)
+                {
+                    //The codec is flushed, no more frame will be output
+                    break;
+                } else if (err != 0){
+                    LOGE("call avcodec_send_packet() returns %d\n", err);
+                    break;
+                } else // err == 0
+                {
+                    // convert audio until there is no more data
+                    AudioFrame *audioFrame = dataReceiver->getUsedAudioFrame();
+                    if(audioFrame == NULL)
+                    {
+                        LOGD("get used AudioFrame NULL");
+                        audioFrame = new AudioFrame(maxAudioDataSizeInByte);
+                    }
 
-
-    //5. 获取解码器参数
-    AVGuard<AVCodecParameters> codev_param = fmt_ctx->streams[video_stream_index]->codecpar;
-
-    //6. 根据codeid获取解码器
-    AVGuard<AVCodec> vcodec = avcodec_find_decoder(codev_param->codec_id);
-    if (!vcodec.get()) {
-        av_log(NULL, AV_LOG_ERROR,
-               "avcodec_find_decoder video failure. \n");
-        return 0;
-    }
-
-    //7. 创建解码器上下文
-    AVGuard<AVCodecContext> vcodec_ctx(avcodec_alloc_context3(vcodec.get()));
-    if(avcodec_parameters_to_context(vcodec_ctx.get(),codev_param.get()) != 0){
-        av_log(NULL, AV_LOG_ERROR, "avcodec_parameters_to_context failure. \n");
-        return 0;
-    }
-
-    //8. 打开解编码器
-    if (avcodec_open2(vcodec_ctx.get(), vcodec.get(),
-            NULL) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "avcodec_open2 failure. \n");
-        return 0;
-    }
-
-    if ((vcodec_ctx->width > 0)&& (vcodec_ctx->height > 0)) {
-        setBuffersGeometry(vcodec_ctx->width,
-                vcodec_ctx->height);
-    }
-    av_log(NULL, AV_LOG_ERROR, "video : width is %d, height is %d . \n",
-            vcodec_ctx->width,
-            vcodec_ctx->height);
-
-
-    //9. 创建编码数据和解码数据结构体
-    AVGuard<AVPacket> m_Packet;
-    AVGuard<AVFrame> m_Frame;
-    int m_StreamIndex = 0;
-
-    //10. 解码循环
-    while (av_read_frame(fmt_ctx.get(), m_Packet.get()) >= 0) {
-        if (m_Packet->stream_index == m_StreamIndex) {
-            if (avcodec_send_packet(vcodec_ctx.get(), m_Packet.get()) != 0) {
-                return 0;
-            }
-            while (avcodec_receive_frame(vcodec_ctx.get(), m_Frame.get()) == 0) {
-                //获取到 m_Frame 解码数据，进行格式转换，然后进行渲染
-                av_log(NULL, AV_LOG_ERROR, "get frame : %d. \n", m_StreamIndex);
-                AVFrame pict;
-                av_image_alloc(pict.data, pict.linesize,
-                               vcodec_ctx->width,
-                               vcodec_ctx->height, AV_PIX_FMT_RGB565LE, 16);
-
-                // Convert the image into YUV format that SDL uses
-                img_convert(&pict, AV_PIX_FMT_RGB565LE, m_Frame.get(),
-                            vcodec_ctx->pix_fmt,
-                            vcodec_ctx->width,
-                            vcodec_ctx->height);
-
-                av_freep(&pict.data[0]);
+                    audioFrame->pts = (int64_t)(frame->pts * av_q2d(audioStream->time_base) * 1000);
+                    uint8_t *tempData = (uint8_t *)(audioFrame->data);
+                    audioFrame->sampleCount = swr_convert(audioSwrCtx, &(tempData), audioSampleCountLimit, (const uint8_t **)frame->data, frame->nb_samples);
+                    if(audioFrame->sampleCount <= 0)
+                    {
+                        // there is no more data, continue to read data from file
+                        dataReceiver->putUsedAudioFrame(audioFrame);
+                        break;
+                    } else
+                    {
+                        dataReceiver->receiveAudioFrame(audioFrame);
+                    }
+                    while(1)
+                    {
+                        // convert audio until there is no more data
+                        AudioFrame *audioFrame = dataReceiver->getUsedAudioFrame();
+                        if(audioFrame == NULL)
+                        {
+                            audioFrame = new AudioFrame(maxAudioDataSizeInByte);
+                        }
+                        memset(audioFrame->data, 0, audioSampleCountLimit * 2 * sizeof(int16_t));
+                        audioFrame->pts = (int64_t)(frame->pts * av_q2d(audioStream->time_base) * 1000);
+                        uint8_t *tempData = (uint8_t *)(audioFrame->data);
+                        audioFrame->sampleCount = swr_convert(audioSwrCtx, &(tempData), audioSampleCountLimit, NULL, 0);
+                        if(audioFrame->sampleCount <= 0)
+                        {
+                            // there is no more data, continue to read data from file
+                            dataReceiver->putUsedAudioFrame(audioFrame);
+                            break;
+                        }else
+                        {
+                            dataReceiver->receiveAudioFrame(audioFrame);
+                        }
+                    }
+                }
             }
         }
-        av_packet_unref(m_Packet.get()); //释放 m_Packet 引用，防止内存泄漏
+        av_packet_unref(packet);
+        audioPacketQueue->putToUsed(packet);
     }
+    av_frame_free(&frame);
 
-    return 0;
+    audioDecodeFinished = true;
+    if(videoDecodeFinished)
+    {
+        resetComponents();
+    }
+    LOGD("decodeAudioThread quit");
 }
 
+void IAVDecoder::decodeVideo() {
+    videoDecodeFinished = false;
+
+    if(videoCodecCtx == NULL)
+    {
+        LOGE("videoCodecCtx is NULL when start decode");
+        return;
+    }
+
+    if(videoCodec == NULL)
+    {
+        LOGE("videoCodec is NULL when start decode");
+        return;
+    }
+    if(videoStream == NULL)
+    {
+        LOGE("videoStream is NULL when start decode");
+        return;
+    }
+
+    if(videoSwsCtx == NULL)
+    {
+        LOGE("videoSwsCtx is NULL when start decode");
+        return;
+    }
+
+    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB565LE, videoCodecCtx->width, videoCodecCtx->height, 1);
+//    int numBytes = videoCodecCtx->width * videoCodecCtx->height * 3;
+
+    AVFrame *frame = av_frame_alloc();
+    AVFrame *convertedFrame = av_frame_alloc();
+
+    uint8_t *outBuffer = new uint8_t[numBytes];
+    av_image_fill_arrays(convertedFrame->data, convertedFrame->linesize, outBuffer, AV_PIX_FMT_RGB565LE, videoCodecCtx->width, videoCodecCtx->height, 1);
+
+    bool readFinish = false;
+    int err = 0;
+    while(!stopDecodeFlag && !readFinish)
+    {
+//        LOGD("start get video packet");
+        AVPacket *packet = videoPacketQueue->get();
+//        LOGD("get a video packet, videoPacketQueue.size = %d", videoPacketQueue->getSize());
+
+        if(packet == NULL)
+        {
+            readFinish = true;
+            break;
+        }
+        chrono::system_clock::time_point startTime = chrono::system_clock::now();
+        err = avcodec_send_packet(videoCodecCtx, packet);
+        if(err == 0)
+        {
+            chrono::system_clock::time_point endTime = chrono::system_clock::now();
+            chrono::milliseconds decodeDuration = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+            LOGD("decode a video frame use %ld ms", decodeDuration.count());
+        }
+
+        if(err == AVERROR(EAGAIN))
+        {
+            // This must not happen
+            LOGE("video send packet returns EAGAIN");
+        } else if (err == AVERROR_EOF){
+            // codec says is EOF, cause we set the packet->size = 0.
+            LOGE("video send packet returns EOF");
+            readFinish = true;
+        } else if (err != 0){
+            LOGE("video send packet returns %d\n", err);
+            continue;
+        } else //err == 0
+        {
+            //read until can not read more to ensure codec won't be full
+            while(1)
+            {
+//                LOGD("video start receive frame");
+                err = avcodec_receive_frame(videoCodecCtx, frame);
+
+                if(err == AVERROR(EAGAIN))
+                {
+                    //Can not read until send a new packet
+                    LOGE("video receive frame returns EAGAIN");
+                    break;
+                } else if(err == AVERROR_EOF)
+                {
+                    //The codec is flushed, no more frame will be output
+                    LOGE("video receive frame returns EOF");
+                    break;
+                } else if (err != 0){
+                    LOGE("video receive frame returns %d\n", err);
+                    break;
+                } else // err == 0
+                {
+                    LOGE("video receive frame returns %d\n", err);
+                    // convert audio until there is no more data
+                    VideoFrame *videoFrame = dataReceiver->getUsedVideoFrame();
+                    if(videoFrame == NULL)
+                    {
+                        LOGE("get used video frame NULL");
+                        videoFrame = new VideoFrame(numBytes);
+                        videoFrame->width = videoCodecCtx->width;
+                        videoFrame->height = videoCodecCtx->height;
+                    }
+                    videoFrame->pts = (int64_t)(frame->pts * av_q2d(videoStream->time_base) * 1000);
+                    LOGV("get pts successed");
+                    err = sws_scale(videoSwsCtx, (const uint8_t* const *)frame->data, (const int*)frame->linesize, 0, videoCodecCtx->height, convertedFrame->data, convertedFrame->linesize);
+                    if(err > 0)
+                    {
+                        memcpy(videoFrame->data, convertedFrame->data[0], numBytes);
+                        LOGD("put a video frame to receiver");
+                        dataReceiver->receiveVideoFrame(videoFrame);
+                    }
+                    else{
+                        LOGE("sws_scale return %d", err);
+                        dataReceiver->putUsedVideoFrame(videoFrame);
+                    }
+                }
+            }
+
+        }
+        av_packet_unref(packet);
+        videoPacketQueue->putToUsed(packet);
+    }
+    free(outBuffer);
+    videoDecodeFinished = true;
+    if(audioDecodeFinished)
+    {
+        resetComponents();
+    }
+    LOGD("decodeVideoThread quit");
+}
+
+void IAVDecoder::discardAllReadPackets() {
+    videoPacketQueue->discardAll(av_packet_unref);
+    audioPacketQueue->discardAll(av_packet_unref);
+
+}
+
+void IAVDecoder::setDataReceiver(AVQueueInterface *_dataReceiver) {
+    dataReceiver = _dataReceiver;
+}
