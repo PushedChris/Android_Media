@@ -19,6 +19,7 @@ OpenSLESPlayer::~OpenSLESPlayer() {
 }
 
 void OpenSLESPlayer::processAudio() {
+    //注意这个是另外一条采集线程回调，
     unique_lock<mutex> providerLock(providerMu);
     if(provider != NULL)
     {
@@ -31,16 +32,15 @@ void OpenSLESPlayer::processAudio() {
         {
 //            LOGD("audio frame sample count = %d, pts = %ld", data->sampleCount, data->pts);
             memcpy(emptyBuffer, data->data, data->sampleCount * 2 * sizeof(int16_t));
+            // 取完数据，需要调用Enqueue触发下一次数据回调
             (*playerBufferQueue)->Enqueue(playerBufferQueue, emptyBuffer, data->sampleCount * 2 * sizeof(int16_t));
-//            fwrite(data->data, sizeof(int16_t), data->sampleCount * 2, pcmFile);
             provider->putBackUsed(data);
         }
-
-
     }
     providerLock.unlock();
 }
 
+//周期性地解析
 void OpenSLESPlayer::audioCallback(SLAndroidSimpleBufferQueueItf bq, void *context)
 {
     LOGD("audio Callback");
@@ -51,14 +51,14 @@ void OpenSLESPlayer::audioCallback(SLAndroidSimpleBufferQueueItf bq, void *conte
 bool OpenSLESPlayer::create() {
     SLresult result;
 
-    //create engine
+    //创建引擎对象
     result = slCreateEngine(&engineObject, 0, NULL, 0, NULL, NULL);
     if(result != SL_RESULT_SUCCESS)
     {
         return false;
     }
 
-
+    //初始化引擎对象
     result = (*engineObject)->Realize(engineObject, SL_BOOLEAN_FALSE);
     if(result != SL_RESULT_SUCCESS)
     {
@@ -72,7 +72,7 @@ bool OpenSLESPlayer::create() {
         return false;
     }
 
-
+    //创建并初始化混音器
     SLInterfaceID ids1[1] = {SL_IID_OUTPUTMIX};
     SLboolean reqs1[1] = {SL_BOOLEAN_FALSE};
     result = (*engineEngine)->CreateOutputMix(engineEngine, &outputMixObject, 0, ids1, reqs1);
@@ -89,7 +89,7 @@ bool OpenSLESPlayer::create() {
     }
 
 
-    // Create player
+    // 创建并初始化播放器
     SLDataLocator_AndroidSimpleBufferQueue bufferQueue = {SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 2};
     SLDataFormat_PCM pcmFormat = {SL_DATAFORMAT_PCM, 2, SL_SAMPLINGRATE_44_1, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16,
                                   SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT, SL_BYTEORDER_LITTLEENDIAN};
