@@ -220,7 +220,8 @@ AudioFrame *MediaPlayerController::getAudioFrame() {
                 unique_lock<mutex> AVFrameLock(videoMu);
                 nextVFrame = waitVFrame;
                 waitVFrame = nullptr;
-                //videoPlayer->renderSurface(nextVFrame->data);
+                LOGV("audio frame : nextVFrame: w %d ,h %d",nextVFrame->width,nextVFrame->height);
+                videoPlayer->renderSurface(nextVFrame->data);
                 videoQueue->putToUsed(nextVFrame);
                 AVFrameLock.unlock();
             } else

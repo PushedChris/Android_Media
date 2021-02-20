@@ -109,6 +109,9 @@ private:
     AVQueueInterface *dataReceiver;
 
     mutex componentsMu;
+
+//    int mPlayerWidth = 1920;
+//    int mPlayerHeight = 1080;
 };
 
 

@@ -12,7 +12,7 @@
 #include <android/log.h>
 
 #define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, TAG, __VA_ARGS__)
-#define TESTFILEPATH "/storage/emulated/0/DCIM/Camera/abc.mp4"
+//#define TESTFILEPATH "/storage/emulated/0/DCIM/Camera/abc.mp4"
 
 ANativeWindow *window = NULL;
 MediaPlayerController *controller = NULL;
@@ -60,8 +60,8 @@ Java_com_comochris_mediaplayer_FFMediaPlayer_openMedia(JNIEnv *env, jobject thiz
         return -1;
     }
     const char *path = env->GetStringUTFChars(filePath,NULL);
-    //bool result = controller->openFile(path);
-    bool result = controller->openFile(TESTFILEPATH);
+    bool result = controller->openFile(path);
+    //bool result = controller->openFile(TESTFILEPATH);
     env->ReleaseStringUTFChars(filePath,path);
     return result;
 }
@@ -94,6 +94,7 @@ Java_com_comochris_mediaplayer_FFMediaPlayer_setSize(JNIEnv *env, jobject thiz,j
         LOGV("controller is NULL");
         return -1;
     }
+    LOGV("controller set width: %d,height : %d",width,height);
     controller->setSize(width,height);
     return 0;
 }

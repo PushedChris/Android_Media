@@ -1,7 +1,3 @@
-//
-// Created by 祖国瑞 on 2020-04-12.
-//
-
 #include "IAVDecoder.h"
 #include <stdint.h>
 #include <android/log.h>
@@ -265,6 +261,8 @@ bool IAVDecoder::initComponents(const char *path) {
         }
 
         videoSwsCtx = sws_getContext(videoCodecCtx->width, videoCodecCtx->height, videoCodecCtx->pix_fmt, videoCodecCtx->width, videoCodecCtx->height, AV_PIX_FMT_RGB565LE, SWS_BILINEAR, NULL, NULL, NULL);
+        //videoSwsCtx = sws_getContext(videoCodecCtx->width, videoCodecCtx->height, videoCodecCtx->pix_fmt, mPlayerWidth, mPlayerHeight, AV_PIX_FMT_RGB565LE, SWS_BILINEAR, NULL, NULL, NULL);
+
         if(videoSwsCtx == NULL)
         {
             LOGE("init videoSwsCtx failed");
@@ -620,14 +618,15 @@ void IAVDecoder::decodeVideo() {
         return;
     }
 
-    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB565LE, videoCodecCtx->width, videoCodecCtx->height, 1);
-//    int numBytes = videoCodecCtx->width * videoCodecCtx->height * 3;
+    int outFrameWidth = videoCodecCtx->width,outFrameHeight = videoCodecCtx->height;
+    //int outFrameWidth = mPlayerWidth,outFrameHeight = mPlayerHeight;
+    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB565LE, outFrameWidth, outFrameHeight, 1);
 
     AVFrame *frame = av_frame_alloc();
     AVFrame *convertedFrame = av_frame_alloc();
 
     uint8_t *outBuffer = new uint8_t[numBytes];
-    av_image_fill_arrays(convertedFrame->data, convertedFrame->linesize, outBuffer, AV_PIX_FMT_RGB565LE, videoCodecCtx->width, videoCodecCtx->height, 1);
+    av_image_fill_arrays(convertedFrame->data, convertedFrame->linesize, outBuffer, AV_PIX_FMT_RGB565LE, outFrameWidth, outFrameHeight, 1);
 
     bool readFinish = false;
     int err = 0;
@@ -692,16 +691,19 @@ void IAVDecoder::decodeVideo() {
                     {
                         LOGE("get used video frame NULL");
                         videoFrame = new VideoFrame(numBytes);
-                        videoFrame->width = videoCodecCtx->width;
-                        videoFrame->height = videoCodecCtx->height;
+                        //videoFrame->width = videoCodecCtx->width;
+                        //videoFrame->height = videoCodecCtx->height;
+                        videoFrame->width = outFrameWidth;
+                        videoFrame->height = outFrameHeight;
                     }
                     videoFrame->pts = (int64_t)(frame->pts * av_q2d(videoStream->time_base) * 1000);
                     LOGV("get pts successed");
                     err = sws_scale(videoSwsCtx, (const uint8_t* const *)frame->data, (const int*)frame->linesize, 0, videoCodecCtx->height, convertedFrame->data, convertedFrame->linesize);
+                    LOGD("sws_scale: ");
                     if(err > 0)
                     {
                         memcpy(videoFrame->data, convertedFrame->data[0], numBytes);
-                        LOGD("put a video frame to receiver");
+                        LOGD("sws_scale:put a video frame to receiver");
                         dataReceiver->receiveVideoFrame(videoFrame);
                     }
                     else{

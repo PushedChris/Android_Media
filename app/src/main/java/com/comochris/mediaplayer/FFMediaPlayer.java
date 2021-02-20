@@ -9,7 +9,8 @@ import android.view.SurfaceView;
 
 public class FFMediaPlayer extends SurfaceView implements SurfaceHolder.Callback{
     private static final String TAG = "mediaplayer";
-    private String TEST_FILE_TFCARD = "/storage/emulated/0/DCIM/Camera/abc.mp4";
+    private String TEST_FILE_TFCARD = "/storage/emulated/0/DCIM/Camera/4k_test.mp4";
+//    private String TEST_FILE_TFCARD = "/storage/emulated/0/DCIM/Camera/abc.mp4";
     static {
         System.loadLibrary("player-ffmpeg");
     }
@@ -28,8 +29,9 @@ public class FFMediaPlayer extends SurfaceView implements SurfaceHolder.Callback
     public void surfaceChanged(SurfaceHolder holder, int format, int width,
                                int height) {
         Log.v(TAG, "surfaceChanged, format is " + format + ", width is "
-                + width + ", height is" + height);
-        setSize(width,height);
+                + width + ", height is " + height);
+        //setSize(1920,1080);
+        setSize(3840,2160);
     }
 
     @Override
